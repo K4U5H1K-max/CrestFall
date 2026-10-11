@@ -1,0 +1,100 @@
+1. Order Management Agent
+Maintains order priorities, tracks order health, and coordinates the fulfilment process. It needs to know whether an order is waiting for picking, packing, dispatch, delivery, or return processing.
+
+2. Picker Agent
+Picks one item at a time, not an entire order in one operation. It selects an item, travels to its location, retrieves it, and transfers it to the packing workflow. An order containing five items therefore requires five successful item-picking operations.
+
+3. Packer Agent
+Receives picked items, associates each item with its correct order, verifies completeness, and packs the order as one entity. The packed order becomes a single unit for dispatch and delivery.
+
+4. Inventory Agent
+Maintains item availability and inventory records. It can identify stock shortages, track returned inventory, and determine whether returned items can be restocked once inspected.
+
+5. Dispatch Agent
+Coordinates the handover of packed orders from the fulfilment center to delivery. It manages dispatch readiness and potential congestion between packing and outbound transport.
+
+6. Delivery Agent
+Transports a packed order from the center to the delivery location. It also handles failed deliveries, customer rejections, and the physical return of orders to the center.
+
+
+Sudo Agent- Coustomer
+places the order(order request is generated) and recives the order and "Might" return the order based on it health. Revese Logistics it performed on the order if return is requested.
+
+
+
+Actions by each agnet/role:
+
+1. Order Management Agent
+"accept_order_request" = "Validates an incoming customer order request before it enters the fulfilment system."
+"prioritize_order" = "Assigns or updates an order's priority based on its deadline, health, and current system conditions."
+"release_order" = "Makes an eligible order available for fulfilment so that a Picker can select it."
+"hold_order" = "Temporarily pauses an order when continuing fulfilment is inappropriate."
+"request_reassignment" = "Requests reassignment of an order or task when its current allocation is unsuitable or progress has stalled."
+"validate_return_request" = "Checks whether a customer's return request is eligible under the return policy and initiates the return workflow if approved."
+"monitor_order_status" = "Observes order progress, health, cancellation outcomes, and return status through the simulation environment."
+
+2. Picker Agent
+"select_picking_task" = "Selects an eligible order or item-picking task from the available workload."
+"select_storage_location" = "Chooses a suitable storage location containing the required item."
+"move_to_location" = "Travels to the selected storage location, consuming simulation time."
+"pick_item" = "Picks exactly one physical unit of the required product for an order."
+"handover_item" = "Transfers a picked unit to the packing workflow and records the change in custody."
+"report_blockage" = "Reports obstacles such as missing stock, inaccessible locations, or item mismatches."
+"wait" = "Waits when no feasible picking task is available or the agent cannot start another operation."
+
+3. Packer Agent
+"select_order_for_packing" = "Chooses an eligible order to process based on completeness, priority, and waiting time."
+"receive_item" = "Accepts a physical unit handed over by the Picker."
+"associate_item_with_order" = "Associates a received unit with the correct order and order line."
+"verify_order_contents" = "Checks that all required products and quantities have been received and are valid for packing."
+"pack_order" = "Combines all verified units of a complete order into a single package."
+"report_item_discrepancy" = "Reports missing, extra, damaged, or incorrectly associated items that prevent correct packing."
+"notify_dispatch_package_ready" = "Notifies Dispatch that a package has been packed and verified and is ready for dispatch."
+"wait" = "Waits when no suitable order is ready for packing."
+
+4. Inventory Agent
+"reserve_stock" = "Reserves available inventory for an eligible order to prevent conflicting allocations."
+"allocate_stock" = "Distributes limited stock among competing orders based on demand, priority, and inventory policy."
+"allocate_picking_location" = "Selects a suitable inventory location for a picking task based on availability and accessibility."
+"forecast_demand" = "Estimates future demand from order history and current demand to support inventory decisions."
+"set_replenishment_priority" = "Prioritizes products that require replenishment based on projected demand, stock levels, and supply risk."
+"request_replenishment" = "Requests a specified quantity of stock from a simulated supplier, with arrival determined by the replenishment lead time."
+"release_reservation" = "Releases unused stock reservations when an order is cancelled or its requirements change."
+"quarantine_stock" = "Keeps damaged, uncertain, or uninspected units unavailable for sale."
+"commit_recovered_stock" = "Adds returned units to sellable inventory after their recovery eligibility has been validated."
+"reconcile_inventory" = "Updates inventory records after validated physical movements, cancellations, returns, and stock discrepancies."
+"wait" = "Takes no inventory action when no intervention is required."
+
+5. Dispatch Agent
+"accept_package" = "Accepts a verified package from the packing workflow."
+"prioritize_package" = "Decides which ready package should be dispatched first based on urgency, deadlines, and delivery capacity."
+"stage_package" = "Places a package in the appropriate outbound staging area while it awaits delivery."
+"assign_delivery_task" = "Assigns an outbound delivery task to an available delivery resource."
+"release_package" = "Authorizes a staged package for handover to Delivery."
+"schedule_return_retrieval" = "Creates a package retrieval task after Order Management approves a return request."
+"prioritize_retrieval" = "Decides which pending return retrieval should be handled first based on urgency and available capacity."
+"wait" = "Takes no dispatch action when no feasible package or retrieval task is available."
+
+6. Delivery Agent
+"select_delivery_task" = "Selects an eligible outbound delivery or return retrieval task from the available workload."
+"select_route" = "Chooses a feasible transportation route based on distance, expected travel time, weather, and deadlines."
+"start_outbound_delivery" = "Begins transporting a released package from the fulfilment center to the customer."
+"complete_delivery" = "Records successful delivery after the package reaches the customer and the delivery conditions are satisfied."
+"report_failed_delivery" = "Records an unsuccessful delivery attempt and its reason so the system can determine the next step."
+"select_retrieval_task" = "Chooses an available package retrieval task for reverse logistics."
+"retrieve_package" = "Collects a designated package from the customer or delivery location and records the custody transfer."
+"return_to_center" = "Transports a retrieved package back to the fulfilment center for inspection and processing."
+"handover_return_package" = "Transfers a retrieved package to Returns Processing after it arrives at the fulfilment center."
+"wait" = "Waits when no feasible delivery or retrieval task is available."
+
+7. Returns Processing Agent
+"select_return_for_processing" = "Chooses which returned package to process next based on waiting time, urgency, and inspection capacity."
+"accept_return" = "Accepts custody of a returned package at the fulfilment center."
+"inspect_package" = "Examines the returned package to establish its contents and identify discrepancies."
+"inspect_item" = "Assesses an individual physical unit to determine its condition and recovery eligibility."
+"classify_item" = "Classifies an inspected unit as recoverable, damaged, or requiring further inspection."
+"request_restock" = "Submits approved recoverable units to Inventory for validation and reintegration into sellable stock."
+"quarantine_item" = "Isolates a unit whose condition is uncertain or which is not yet approved for resale."
+"request_disposal" = "Initiates the recorded disposal process for a unit confirmed to be unrecoverable."
+"close_return_case" = "Requests closure of a return case after all items have been processed and the required recovery or disposal operations are complete."
+"wait" = "Waits when no return is ready for processing."
