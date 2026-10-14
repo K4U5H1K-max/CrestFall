@@ -37,8 +37,10 @@ class SimulationSate:#current simulation state
 
 
 class OrderManagementAgent:
-    def __init__(self, agent_id):
+    def __init__(self, agent_id,order_queue=[], neighboring_agents=[]):
         self.agent_id = agent_id
+        self.order_queue = order_queue  # Queue of order requests to be processed
+        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
 
 
     def process_order_request(self, order_request):
@@ -81,3 +83,139 @@ class OrderManagementAgent:
     def wait(self):
         #wait until the picker is ready or no action is needed ie there is no new orders.
         pass
+class PickerAgent:
+    def __init__(self,picker_id, item_capacity,order_queue=[], items=[],neighboring_agents=[]):
+        self.picker_id = picker_id
+        self.item_capacity = item_capacity  # Maximum number of items the picker can carry
+        self.order_queue = order_queue  # Queue of orders assigned to the picker(only item list of the order is assigned to the picker agent, not the whole order object)
+        self.items = items  # List of items needed to be picked up for delivery (only item list of the order is assigned to the picker agent, not the whole order object)
+        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
+    def find_items(self, order_queue):
+        #check if the items in the order queue are available in the inventory and if not then remove them from the order queue and update the order status to "on-hold" and make the inventory agent aware of the unavailability of the items in the order queue so that it can update the inventory and make the items available for the picker agent to pick up and deliver to the customer.
+        pass
+    def pick_items(self, items):
+        #pick items from the inventory after initial check(find_items) and pick items and move them to packer
+        # (whole idea) picker goes to invetory management agent with the list of the objects in an order
+        # the invetory agent gives tassk to picker to pick certain items from its inventory(available items) and then picker picks the items and moves them to packer agent for packing and then packer agent packs the items and moves them to dispatch agent which then assigns them to the delivery agent for delivery to the customer.
+        pass
+    def move_to_packer(self, items):
+        #move the picked items to the packer agent for packing
+        pass
+    def wait(self):
+        #wait until the packer is ready or no action is needed ie there is no new orders.
+        pass
+
+
+
+class PackerAgent:
+    def __init__(self, packer_id, package_capacity, order_queue=[], packages=[], neighboring_agents=[]):
+        self.packer_id = packer_id
+        self.package_capacity = package_capacity  # Maximum number of packages the packer can handle
+        self.order_queue = order_queue  # Queue of orders assigned to the packer(only item list of the order is assigned to the packer agent, not the whole order object)
+        self.packages = packages  # List of packages to be packed for delivery (only item list of the order is assigned to the packer agent, not the whole order object)
+        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
+    def pack_items(self, items):
+        #pack items into packages after receiving them from picker agent and move them to dispatch agent for delivery
+        pass
+    def move_to_dispatch(self, packages):
+        #move the packed packages to the dispatch agent for delivery
+        pass
+    def wait(self):
+        #wait until the dispatch is ready or no action is needed ie there is no new orders.
+        pass
+
+
+
+class DispatchAgent:
+    def __init__(self, dispatch_id, delivery_capacity, order_queue=[], deliveries=[], neighboring_agents=[]):
+        self.dispatch_id = dispatch_id
+        self.delivery_capacity = delivery_capacity  # Maximum number of deliveries the dispatch can handle
+        self.order_queue = order_queue  # Queue of orders assigned to the dispatch(only item list of the order is assigned to the dispatch agent, not the whole order object)
+        self.deliveries = deliveries  # List of deliveries to be made (only item list of the order is assigned to the dispatch agent, not the whole order object)
+        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
+    def assign_returns(self, return_requests):
+        #assign return requests to delivery agents for pickup from customers and return to the return_evaluation agent for evaluation which return to the inventory agent for restocking or disposal.
+        pass
+    def assign_delivery(self, packages):
+        #assign packages to delivery agents for delivery to customers
+        pass
+    def wait(self):
+        #wait until the delivery agent is ready or no action is needed ie there is no new orders.
+        pass
+
+
+
+class DeliveryAgent:
+    def __init__(self, delivery_id, delivery_capacity, order_queue=[], deliveries=[], neighboring_agents=[]):
+        self.delivery_id = delivery_id
+        self.delivery_capacity = delivery_capacity  # Maximum number of deliveries the delivery agent can handle
+        self.order_queue = order_queue  # Queue of orders assigned to the delivery agent(only item list of the order is assigned to the delivery agent, not the whole order object)
+        self.deliveries = deliveries  # List of deliveries to be made (only item list of the order is assigned to the delivery agent, not the whole order object)
+        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
+    def deliver_packages(self, packages):
+        #deliver packages to customers after receiving them from dispatch agent and update the order status to "completed" or "failed" based on the delivery outcome.
+        pass
+    def wait(self):
+        #wait until the dispatch is ready or no action is needed ie there is no new orders.
+        pass
+
+
+
+class InventoryAgent:
+    def __init__(self, inventory_id, items=[], neighboring_agents=[]):
+        self.inventory_id = inventory_id
+        self.items = items  # List of items available in the inventory
+        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
+    def check_availability(self, items):
+        #check if the items are available in the inventory and return a list of available items and notify the picker agent about the unavailability of the items in the order queue so that it can update the order status to "on-hold" and make the inventory agent aware of the availability and unavailability of the items to the picker.
+        pass
+    def update_inventory(self, items, action):
+        #update the inventory based on the action performed by the picker agent or any other agent that affects the inventory.
+        pass
+    def place_order(self, items):
+        #place an order for invetory refill based on the items that are unavailable in the inventory and return a list of items that are ordered for refill.
+        #this function will take some time in simulation to make ot look like an actual inventory refill order is placed and the items are restocked in the inventory after some time.
+        #this will be a rl based predictive refill system that will predict the items that are likely to be ordered in the future based on the current orders and the historical data of the orders and the inventory levels and the weather conditions and the time of the day and the malicious factors affecting the simulation.
+        pass
+    def wait(self):
+        #wait until the picker is ready or no action is needed ie there is no new orders.
+        pass
+    def handle_returned_items(self, items):
+        #handle the returned items from the customers and update the inventory based on  the returned items evaluator agent.
+        pass
+
+
+
+class ReturnEvaluationAgent:
+    def __init__(self, return_evaluation_id, neighboring_agents=[]):
+        self.return_evaluation_id = return_evaluation_id
+        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
+    def assess_trust_score_of_costomer(self, customer_id):
+        #assess and update the trust score of the customer based on the historical data of the customer and the return policy of the system and the malicious factors affecting the simulation.
+        pass
+    def evaluate_returned_items(self, items):
+        #evaluate the returned items from the customers and determine if they can be restocked in the inventory or need to be disposed of based on the condition of the items and the return policy of the system.
+        pass
+    def wait(self):
+        #wait until the inventory agent is ready or no action is needed ie there is no new orders.
+        pass
+
+
+
+class CustomerAgent:#this is a pseudo agent that will input the oeder into the system
+    def __init__(self, customer_id, order_requests=[], neighboring_agents=[]):
+        self.customer_id = customer_id
+        self.order_requests = order_requests  # List of order requests made by the customer
+        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
+    def place_order_request(self, order_request):
+        #place an order request to the order management agent and wait for the response from the order management agent.
+        pass
+    def recieve_order(self, order):
+        #recieves the order and evaluate it to decide accept or return the order and wait for the response from the order management agent.
+        pass
+    def return_items(self, items):
+        #return items to the return evaluation agent and wait for the response from the return evaluation agent.
+        pass
+    def wait(self):
+        pass
+    #wait for the order.
