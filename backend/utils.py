@@ -54,8 +54,9 @@ class OrderManagementAgent:
     
     def generate_order_id(self):
         import uuid
+        # after generating the order id, update the order database with the new order id and the order details, so that the order can be tracked and managed throughout the system.
         return str(uuid.uuid4())  # Generate a unique order ID using UUID
-
+    
     
     def calculate_priority(self, order_obj):
         #need to find a way to calculate a quntififable way to categorise an order into 3 priority levels: high, medium, low based on the location of the order and the items in the order and the health of the order and the weather conditions and the time of the day and the malicious factors affecting the simulation
