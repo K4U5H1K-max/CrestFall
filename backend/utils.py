@@ -37,18 +37,18 @@ class SimulationSate:#current simulation state
 
 
 class OrderManagementAgent:
-    def __init__(self, agent_id,order_queue=[], neighboring_agents=[]):
+    def __init__(self, agent_id, order_queue=None, neighboring_agents=None):
         self.agent_id = agent_id
-        self.order_queue = order_queue  # Queue of order requests to be processed
-        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
+        self.order_queue = [] if order_queue is None else order_queue
+        self.neighboring_agents = [] if neighboring_agents is None else neighboring_agents
 
 
     def process_order_request(self, order_request):
         # Process the order request and create an order object
         order_id = self.generate_order_id()  # Generate a unique order ID
-        health = self.calculate_initial_health(order_request.items)  # Calculate initial health of the order
+        health = {item: 100 for item in order_request.items}
         status = "pending"  # Initial status of the order
-        order_obj = order(order_id, order_request.customer_name, order_request.items, order_request.location, health, status, order_request.priority)
+        order_obj = order(order_id, order_request.customer_name, order_request.items, order_request.location, health, status, 0)
         return order_obj
 
     
@@ -72,25 +72,56 @@ class OrderManagementAgent:
     def release_order(self, order_obj):
         # Release the order to the system (e.g., assign it to a picker agent)
         #assigned only when a picker agent is available
-        pass
+        picker = next(
+            (
+                agent
+                for agent in self.neighboring_agents
+                if isinstance(agent, PickerAgent) and agent.state == "wait"
+            ),
+            None,
+        )
+        if picker is None:
+            return False
+
+        picker.order_queue.append(order_obj)
+        order_obj.status = "picking"
+        picker.state = "picking"
+        return True
 
 
     def accept_return_request(self, order_obj):
         # Accept a return request for the order
         order_obj.status = "return"  # Update the status of the order to "return"
-        # Additional logic for processing the return can be added here
+        return_agent = next(
+            (
+                agent
+                for agent in self.neighboring_agents
+                if isinstance(agent, ReturnEvaluationAgent)
+            ),
+            None,
+        )
+        if return_agent is None:
+            return False
+
+        return_agent.order_queue.append(order_obj)
+        return True
 
 
     def wait(self):
         #wait until the picker is ready or no action is needed ie there is no new orders.
-        pass
+        while self.order_queue:
+            if not self.release_order(self.order_queue[0]):
+                return False
+            self.order_queue.pop(0)
+        return True
 class PickerAgent:
-    def __init__(self,picker_id, item_capacity,order_queue=[], items=[],neighboring_agents=[]):
+    def __init__(self, picker_id, item_capacity, order_queue=None, items=None, neighboring_agents=None, state="wait"):
         self.picker_id = picker_id
         self.item_capacity = item_capacity  # Maximum number of items the picker can carry
-        self.order_queue = order_queue  # Queue of orders assigned to the picker(only item list of the order is assigned to the picker agent, not the whole order object)
-        self.items = items  # List of items needed to be picked up for delivery (only item list of the order is assigned to the picker agent, not the whole order object)
-        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
+        self.order_queue = [] if order_queue is None else order_queue
+        self.items = [] if items is None else items
+        self.neighboring_agents = [] if neighboring_agents is None else neighboring_agents
+        self.state = state
     def find_items(self, order_queue):
         #check if the items in the order queue are available in the inventory and if not then remove them from the order queue and update the order status to "on-hold" and make the inventory agent aware of the unavailability of the items in the order queue so that it can update the inventory and make the items available for the picker agent to pick up and deliver to the customer.
         pass
@@ -188,9 +219,10 @@ class InventoryAgent:
 
 
 class ReturnEvaluationAgent:
-    def __init__(self, return_evaluation_id, neighboring_agents=[]):
+    def __init__(self, return_evaluation_id, neighboring_agents=None):
         self.return_evaluation_id = return_evaluation_id
-        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
+        self.neighboring_agents = [] if neighboring_agents is None else neighboring_agents
+        self.order_queue = []
     def assess_trust_score_of_costomer(self, customer_id):
         #assess and update the trust score of the customer based on the historical data of the customer and the return policy of the system and the malicious factors affecting the simulation.
         pass
