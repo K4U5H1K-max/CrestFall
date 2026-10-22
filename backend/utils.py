@@ -122,6 +122,10 @@ class PickerAgent:
         self.items = [] if items is None else items
         self.neighboring_agents = [] if neighboring_agents is None else neighboring_agents
         self.state = state
+        self.available_items = []
+
+    def inventory_refilled(self, items):
+        self.available_items.extend(items)
     def find_items(self, order_queue):
         #check if the items in the order queue are available in the inventory and if not then remove them from the order queue and update the order status to "on-hold" and make the inventory agent aware of the unavailability of the items in the order queue so that it can update the inventory and make the items available for the picker agent to pick up and deliver to the customer.
         pass
@@ -194,27 +198,120 @@ class DeliveryAgent:
 
 
 class InventoryAgent:
-    def __init__(self, inventory_id, items=[], neighboring_agents=[]):
+    def __init__(self, inventory_id, items=None, neighboring_agents=None):
         self.inventory_id = inventory_id
-        self.items = items  # List of items available in the inventory
-        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
-    def check_availability(self, items):
-        #check if the items are available in the inventory and return a list of available items and notify the picker agent about the unavailability of the items in the order queue so that it can update the order status to "on-hold" and make the inventory agent aware of the availability and unavailability of the items to the picker.
-        pass
+        self.items = {}
+        self.item_health = {}
+        self.neighboring_agents = [] if neighboring_agents is None else neighboring_agents
+        self.pending_orders = []
+        self.waiting_pickers = {}
+        self.simulation_time = 0
+        self.notifications = []
+        if items is not None:
+            self.update_inventory(items, "add")
+
+    @staticmethod
+    def _item_quantities(items):
+        if isinstance(items, dict):
+            return list(items.items())
+        return [(item, 1) for item in items]
+
+    def _add_item(self, item, quantity, health=100):
+        if quantity <= 0:
+            raise ValueError("Item quantity must be positive")
+        self.items[item] = self.items.get(item, 0) + quantity
+        self.item_health.setdefault(item, []).extend([health] * quantity)
+
+    def check_availability(self, items, picker=None):
+        available = []
+        unavailable = []
+        for item, quantity in self._item_quantities(items):
+            stock = self.items.get(item, 0)
+            available_quantity = min(stock, quantity)
+            available.extend([item] * available_quantity)
+            if available_quantity < quantity:
+                unavailable.append((item, quantity - available_quantity))
+
+        if unavailable:
+            if picker is not None:
+                for item, quantity in unavailable:
+                    self.waiting_pickers.setdefault(item, []).append(picker)
+            self.place_order(dict(unavailable))
+        return available
+
     def update_inventory(self, items, action):
         #update the inventory based on the action performed by the picker agent or any other agent that affects the inventory.
-        pass
-    def place_order(self, items):
+        action = action.lower()
+        if action in {"add", "refill", "return", "returned"}:
+            for item, value in self._item_quantities(items):
+                if isinstance(value, tuple):
+                    quantity, health = value
+                else:
+                    quantity, health = value, 100
+                self._add_item(item, quantity, health)
+        elif action in {"remove", "pick", "picked", "consume"}:
+            for item, quantity in self._item_quantities(items):
+                if self.items.get(item, 0) < quantity:
+                    raise ValueError(f"Insufficient inventory for item: {item}")
+            for item, quantity in self._item_quantities(items):
+                self.items[item] -= quantity
+                del self.item_health[item][:quantity]
+        else:
+            raise ValueError(f"Unsupported inventory action: {action}")
+        return dict(self.items)
+
+    def place_order(self, items, simulation_time=0):
         #place an order for invetory refill based on the items that are unavailable in the inventory and return a list of items that are ordered for refill.
         #this function will take some time in simulation to make ot look like an actual inventory refill order is placed and the items are restocked in the inventory after some time.
         #this will be a rl based predictive refill system that will predict the items that are likely to be ordered in the future based on the current orders and the historical data of the orders and the inventory levels and the weather conditions and the time of the day and the malicious factors affecting the simulation.
-        pass
-    def wait(self):
-        #wait until the picker is ready or no action is needed ie there is no new orders.
-        pass
+        if simulation_time < 0:
+            raise ValueError("Simulation time cannot be negative")
+        refill = dict(self._item_quantities(items))
+        if simulation_time == 0:
+            self.update_inventory(refill, "refill")
+            self._notify_waiting_pickers(refill)
+        else:
+            self.pending_orders.append(
+                {"items": refill, "ready_at": self.simulation_time + simulation_time}
+            )
+        return refill
+
+    def _notify_waiting_pickers(self, items):
+        for item, quantity in items.items():
+            pickers = self.waiting_pickers.pop(item, [])
+            notification = [item] * quantity
+            for picker in pickers:
+                if hasattr(picker, "inventory_refilled"):
+                    picker.inventory_refilled(notification)
+            if pickers:
+                self.notifications.extend(notification)
+
+    def wait(self, simulation_time=0):
+        #wait when no action is needed ie there is no new orders.
+        if simulation_time < 0:
+            raise ValueError("Simulation time cannot be negative")
+        self.simulation_time += simulation_time
+        completed = []
+        remaining = []
+        for order in self.pending_orders:
+            if order["ready_at"] <= self.simulation_time:
+                self.update_inventory(order["items"], "refill")
+                self._notify_waiting_pickers(order["items"])
+                completed.append(order["items"])
+            else:
+                remaining.append(order)
+        self.pending_orders = remaining
+        return completed
+
     def handle_returned_items(self, items):
         #handle the returned items from the customers and update the inventory based on  the returned items evaluator agent.
-        pass
+        for item, value in self._item_quantities(items):
+            if isinstance(value, tuple):
+                quantity, health = value
+            else:
+                quantity, health = value, 100
+            self._add_item(item, quantity, health)
+        return dict(self.items)
 
 
 
