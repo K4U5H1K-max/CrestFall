@@ -54,22 +54,6 @@ CREATE TABLE IF NOT EXISTS inventory_units (
     FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS inventory_movements (
-    movement_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    product_id TEXT NOT NULL,
-    order_id TEXT,
-    quantity INTEGER NOT NULL CHECK (quantity > 0),
-    movement_type TEXT NOT NULL
-        CHECK (movement_type IN (
-            'stock_received', 'reserved', 'released', 'picked',
-            'returned', 'damaged', 'disposed'
-        )),
-    simulation_time INTEGER NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (product_id) REFERENCES inventory(product_id),
-    FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE SET NULL
-);
-
 CREATE TABLE IF NOT EXISTS simulation_events (
     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
     simulation_time INTEGER NOT NULL,
@@ -83,9 +67,6 @@ CREATE TABLE IF NOT EXISTS simulation_events (
 
 CREATE INDEX IF NOT EXISTS idx_orders_status_priority
     ON orders(status, priority DESC, created_at);
-
-CREATE INDEX IF NOT EXISTS idx_inventory_movements_product
-    ON inventory_movements(product_id, simulation_time);
 
 CREATE INDEX IF NOT EXISTS idx_inventory_units_product_status
     ON inventory_units(product_id, status);

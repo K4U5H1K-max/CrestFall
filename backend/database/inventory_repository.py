@@ -122,7 +122,6 @@ class InventoryRepository:
             """,
             (product_id, quantity, reorder_level),
         )
-        self._record_movement(product_id, quantity, "stock_received", simulation_time)
         self.connection.commit()
 
     def get_available_quantity(self, product_id: str) -> int:
@@ -150,9 +149,6 @@ class InventoryRepository:
             )
             if cursor.rowcount != 1:
                 raise ValueError(f"Insufficient stock for product: {product_id}")
-            self._record_movement(
-                product_id, quantity, "reserved", simulation_time, order_id
-            )
             self.connection.commit()
         except Exception:
             self.connection.rollback()
@@ -176,9 +172,6 @@ class InventoryRepository:
             )
             if cursor.rowcount != 1:
                 raise ValueError(f"Insufficient reservation for product: {product_id}")
-            self._record_movement(
-                product_id, quantity, "released", simulation_time, order_id
-            )
             self.connection.commit()
         except Exception:
             self.connection.rollback()
@@ -214,27 +207,7 @@ class InventoryRepository:
             if self.connection.execute("SELECT changes()").fetchone()[0] != 1:
                 raise ValueError(f"Invalid pick for order item: {order_id}/{product_id}")
 
-            self._record_movement(
-                product_id, quantity, "picked", simulation_time, order_id
-            )
             self.connection.commit()
         except Exception:
             self.connection.rollback()
             raise
-
-    def _record_movement(
-        self,
-        product_id: str,
-        quantity: int,
-        movement_type: str,
-        simulation_time: int,
-        order_id: str | None = None,
-    ) -> None:
-        self.connection.execute(
-            """
-            INSERT INTO inventory_movements
-                (product_id, order_id, quantity, movement_type, simulation_time)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (product_id, order_id, quantity, movement_type, simulation_time),
-        )

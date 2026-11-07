@@ -1,11 +1,12 @@
 1. Order Management Agent
-Maintains order priorities, tracks order health, and coordinates the fulfilment process. It needs to know whether an order is waiting for picking, packing, dispatch, delivery, or return processing.
+Maintains order priorities, tracks order health(calculated by average helath of all items in the order, after the items are picked), and coordinates(initial picker agent selection only) the fulfilment process. It needs to know whether an order is waiting for picking, packing, dispatch, delivery, or return processing.
+when an order is returned it allocates the return evalution agent(based on agents availability).
 
 2. Picker Agent
-Picks one item at a time, not an entire order in one operation. It selects an item, travels to its location, retrieves it, and transfers it to the packing workflow. An order containing five items therefore requires five successful item-picking operations.
+Picks one item at a time, not an entire order in one operation. It selects an item(items in inventory are in stack form hence the topmost item from thhe specific item inventory is picked), travels to its location, retrieves it(aesthetics), and transfers it to the packing workflow(picker-packer list to coordinate between agents ie when an item is picked it picker must move to the packer which is already working on the order). An order containing five items therefore requires five successful item-picking operations/capacity based picking.
 
 3. Packer Agent
-Receives picked items, associates each item with its correct order, verifies completeness, and packs the order as one entity. The packed order becomes a single unit for dispatch and delivery.
+Receives picked items, associates each item with its correct order, verifies completeness, and packs the order as one entity. The packed order becomes a single unit for dispatch and delivery.moves the order to dispatch agent.
 
 4. Inventory Agent
 Maintains item availability and inventory records. It can identify stock shortages, track returned inventory, and determine whether returned items can be restocked once inspected.

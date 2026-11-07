@@ -17,7 +17,6 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.inventory = InventoryRepository(self.connection)
 
     def tearDown(self) -> None:
-        self.connection.execute("DELETE FROM inventory_movements")
         self.connection.execute("DELETE FROM inventory_units")
         self.connection.execute("DELETE FROM order_items")
         self.connection.execute("DELETE FROM orders")
