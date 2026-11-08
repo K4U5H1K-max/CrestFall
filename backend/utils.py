@@ -1,3 +1,192 @@
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class AgentAction:
+    agent_id: str
+    action_type: str
+    parameters: dict = field(default_factory=dict)
+    timestep: int = 0
+
+
+@dataclass
+class AgentTransition:
+    timestep: int
+    agent_id: str
+    observation: dict
+    action: AgentAction
+    reward: float
+    next_observation: dict
+    done: bool
+    result: dict
+
+
+class AgentProtocol:
+    """Common observation, decision, and execution boundary for operational agents."""
+
+    def observe(self, state=None):
+        observation = {
+            "agent_id": self._agent_id(),
+            "agent_type": type(self).__name__,
+            "state": getattr(self, "state", "available"),
+            "queue_size": len(getattr(self, "order_queue", [])),
+        }
+        if state is not None:
+            observation["timestep"] = getattr(state, "time", 0)
+        return observation
+
+    def select_action(self, observation, timestep=0):
+        action = self._model().predict(
+            observation,
+            self.available_actions() if hasattr(self, "available_actions") else [
+                {"action_type": "wait", "parameters": {}}
+            ],
+        )
+        return AgentAction(
+            self._agent_id(),
+            action["action_type"],
+            action.get("parameters", {}),
+            timestep,
+        )
+
+    def available_actions(self):
+        return [{"action_type": "wait", "parameters": {}}]
+
+    def _model(self):
+        if getattr(self, "model", None) is None:
+            from backend.model.placeholder import PlaceholderModel
+
+            self.model = PlaceholderModel()
+        return self.model
+
+    def execute_action(self, action, state=None):
+        if isinstance(action, dict):
+            action = AgentAction(
+                action["agent_id"],
+                action["action_type"],
+                action.get("parameters", {}),
+                action.get("timestep", 0),
+            )
+        if action.agent_id != self._agent_id():
+            raise ValueError(
+                f"Action belongs to {action.agent_id}, not {self._agent_id()}"
+            )
+        if action.action_type == "wait":
+            result = self.wait()
+            return {"success": bool(result), "action": "wait"}
+        raise ValueError(
+            f"{type(self).__name__} does not implement action "
+            f"{action.action_type!r}"
+        )
+
+    def _agent_id(self):
+        for attribute in ("agent_id", "picker_id", "inventory_id", "packer_id",
+                          "dispatch_id", "delivery_id", "return_evaluation_id"):
+            if hasattr(self, attribute):
+                return getattr(self, attribute)
+        raise AttributeError("Agent has no identifier")
+
+
+class SimulationState:
+    def __init__(
+        self,
+        orders=None,
+        agents=None,
+        time=0,
+        weather="Normal",
+        malicious_factors=None,
+        action_queue=None,
+    ):
+        self.orders = [] if orders is None else orders
+        self.agents = [] if agents is None else agents
+        self.time = time
+        self.weather = weather
+        self.malicious_factors = [None] if malicious_factors is None else malicious_factors
+        self.action_queue = [] if action_queue is None else action_queue
+
+
+class SimulationSate(SimulationState):
+    """Backward-compatible spelling retained for existing callers."""
+
+
+class SimulationEngine:
+    def __init__(self, state, models=None):
+        self.state = state
+        self.transitions = []
+        if models is None:
+            from backend.model.loader import load_models
+
+            models = load_models()
+        self.models = models
+        for agent in self.state.agents:
+            if getattr(agent, "model", None) is None:
+                role = self._role_for(agent)
+                agent.model = self.models.get(role)
+            if isinstance(agent, InventoryAgent):
+                if "predictive_refill" in self.models:
+                    agent.predictive_refill_model = self.models.get(
+                        "predictive_refill"
+                    )
+                agent.initialize_predictive_refill()
+
+    @staticmethod
+    def _role_for(agent):
+        role = type(agent).__name__.replace("Agent", "")
+        return {
+            "OrderManagement": "order_management",
+            "Picker": "picker",
+            "Inventory": "inventory",
+            "Packer": "packer",
+            "Dispatch": "dispatch",
+            "Delivery": "delivery",
+            "ReturnEvaluation": "return_evaluation",
+        }.get(role, role.lower())
+
+    def step(self, actions=None):
+        timestep = self.state.time
+        actions = self._actions_for_timestep(actions, timestep)
+        transitions = []
+        for agent, action in actions:
+            observation = agent.observe(self.state)
+            result = agent.execute_action(action, self.state)
+            next_observation = agent.observe(self.state)
+            transitions.append(
+                AgentTransition(
+                    timestep=timestep,
+                    agent_id=agent._agent_id(),
+                    observation=observation,
+                    action=action,
+                    reward=float(result.get("reward", 0.0)),
+                    next_observation=next_observation,
+                    done=bool(result.get("done", False)),
+                    result=result,
+                )
+            )
+        self.transitions.extend(transitions)
+        self.state.time += 1
+        return transitions
+
+    def _actions_for_timestep(self, actions, timestep):
+        if actions is None:
+            return [
+                (agent, agent.select_action(agent.observe(self.state), timestep))
+                for agent in self.state.agents
+            ]
+        if len(actions) != len({action.agent_id for action in actions}):
+            raise ValueError("Each agent may submit at most one action per timestep")
+        agents_by_id = {agent._agent_id(): agent for agent in self.state.agents}
+        selected = []
+        for action in actions:
+            if action.timestep != timestep:
+                raise ValueError(
+                    f"Action timestep {action.timestep} does not match {timestep}"
+                )
+            if action.agent_id not in agents_by_id:
+                raise ValueError(f"Unknown agent: {action.agent_id}")
+            selected.append((agents_by_id[action.agent_id], action))
+        return selected
+
+
 class orderRequest:
     def __init__(self, order_id, customer_name, items, location, priority=0):
         #self.order_id = order_id #will be generated by the Order management agent
@@ -24,7 +213,7 @@ class order:#order request becomes order if the order magement agent releases it
 
 
 
-class SimulationSate:#current simulation state
+class LegacySimulationSate:
     def __init__(self, orders, agents, time, weather = "Normal",malicious_factors=[None],action_queue=[]):
         self.orders = orders  # List of order objects
         self.agents = agents  # List of agent objects(will most likely be a graph with nodes as agents and edges as the communication between them only for backend purposes, not for the frontend)
@@ -36,11 +225,12 @@ class SimulationSate:#current simulation state
 
 
 
-class OrderManagementAgent:
-    def __init__(self, agent_id, order_queue=None, neighboring_agents=None):
+class OrderManagementAgent(AgentProtocol):
+    def __init__(self, agent_id, order_queue=None, neighboring_agents=None, model=None):
         self.agent_id = agent_id
         self.order_queue = [] if order_queue is None else order_queue
         self.neighboring_agents = {} if neighboring_agents is None else neighboring_agents
+        self.model = model
 
 
     def process_order_request(self, order_request):
@@ -115,8 +305,31 @@ class OrderManagementAgent:
                 return False
             self.order_queue.pop(0)
         return True
-class PickerAgent:
-    def __init__(self, picker_id, item_capacity, order_queue=None, items=None, neighboring_agents=None, state="wait"):
+
+    def execute_action(self, action, state=None):
+        if isinstance(action, dict):
+            action = AgentAction(
+                action["agent_id"], action["action_type"],
+                action.get("parameters", {}), action.get("timestep", 0)
+            )
+        if action.action_type == "release_order":
+            order_id = action.parameters["order_id"]
+            order_obj = next(
+                (candidate for candidate in self.order_queue
+                 if candidate.order_id == order_id),
+                None,
+            )
+            if order_obj is None:
+                raise ValueError(f"Unknown queued order: {order_id}")
+            released = self.release_order(order_obj)
+            if released:
+                self.order_queue.remove(order_obj)
+            return {"success": released, "action": "release_order"}
+        return super().execute_action(action, state)
+
+
+class PickerAgent(AgentProtocol):
+    def __init__(self, picker_id, item_capacity, order_queue=None, items=None, neighboring_agents=None, state="wait", model=None):
         self.picker_id = picker_id
         self.item_capacity = item_capacity  # Maximum number of items the picker can carry
         self.order_queue = [] if order_queue is None else order_queue
@@ -128,6 +341,229 @@ class PickerAgent:
         self.last_picked_order_id = None
         self.blocked_orders = {}
         self.order_registry = {}
+        self.carried_items = {}
+        self.model = model
+
+    def observe(self, state=None):
+        observation = super().observe(state)
+        observation.update(
+            {
+                "orders": [
+                    {
+                        "order_id": order.order_id,
+                        "status": order.status,
+                        "remaining_items": self._remaining_items(order),
+                    }
+                    for order in self.order_queue
+                ],
+                "blocked_orders": list(self.blocked_orders),
+                "picked_items": {
+                    order_id: {
+                        item: list(healths)
+                        for item, healths in picked.items()
+                    }
+                    for order_id, picked in self.items.items()
+                },
+                "carried_items": {
+                    order_id: {
+                        item: list(healths)
+                        for item, healths in carried.items()
+                    }
+                    for order_id, carried in self.carried_items.items()
+                },
+                "available_items": list(self.available_items),
+                "capacity_remaining": self._capacity_remaining(),
+                "action_mask": self.available_actions(),
+            }
+        )
+        return observation
+
+    def _remaining_items(self, order_obj):
+        picked = self.items.get(order_obj.order_id, {})
+        return {
+            item: max(quantity - len(picked.get(item, [])), 0)
+            for item, quantity in order_obj.items.items()
+            if quantity > len(picked.get(item, []))
+        }
+
+    def _capacity_remaining(self):
+        queued = sum(len(actions) for actions in self.action_queue.values())
+        return max(self.item_capacity - queued - self._carried_quantity(), 0)
+
+    def _carried_quantity(self):
+        return sum(
+            len(healths)
+            for carried in self.carried_items.values()
+            for healths in carried.values()
+        )
+
+    def _order_is_carried(self, order_id):
+        order_obj = self.order_registry.get(order_id)
+        return order_obj is not None and order_obj.status not in {
+            "packing", "packed", "completed"
+        }
+
+    def _connected_packers(self):
+        neighbors = (
+            self.neighboring_agents.keys()
+            if isinstance(self.neighboring_agents, dict)
+            else self.neighboring_agents
+        )
+        return [
+            agent for agent in neighbors if isinstance(agent, PackerAgent)
+        ]
+
+    def _has_packer_capacity(self, order_id=None):
+        return any(
+            order_id in {
+                package["order_id"] for package in packer.packages
+            }.union(
+                queued["order_id"] for queued in packer.order_queue
+            )
+            or len({
+                package["order_id"] for package in packer.packages
+            }.union(
+                queued["order_id"] for queued in packer.order_queue
+            )) < packer.package_capacity
+            for packer in self._connected_packers()
+        )
+
+    def _is_legal_picker_action(self, action_type, parameters):
+        if action_type == "wait":
+            return True, ""
+
+        order_id = parameters.get("order_id")
+        order_obj = self.order_registry.get(order_id)
+        if order_obj is None:
+            order_obj = next(
+                (
+                    candidate for candidate in self.order_queue
+                    if candidate.order_id == order_id
+                ),
+                None,
+            )
+        if order_obj is None:
+            return False, f"Unknown order: {order_id}"
+
+        remaining = self._remaining_items(order_obj)
+        if order_obj.status in {"packing", "packed", "completed"}:
+            return False, f"Order is not active: {order_id}"
+        if (
+            order_obj.status == "on-hold"
+            and action_type not in {"pick", "unload_to_packer", "move_to_packer"}
+        ):
+            return False, f"Order is waiting for inventory: {order_id}"
+
+        if action_type == "find_items":
+            if not remaining:
+                return False, "Order has no remaining items"
+            if order_id in self.action_queue:
+                return False, "Order already has queued actions"
+            if self._capacity_remaining() < 1:
+                return False, "Picker capacity is full"
+            return True, ""
+
+        if action_type == "pick":
+            item = parameters.get("item")
+            if item not in remaining:
+                return False, f"Item is not required: {item}"
+            if not any(
+                action["item"] == item
+                for action in self.action_queue.get(order_id, [])
+            ):
+                return False, f"No queued pick action for item: {item}"
+            inventory = self._inventory_agent()
+            if inventory is None or inventory.items.get(item, 0) < 1:
+                return False, f"Item is unavailable in inventory: {item}"
+            if self.item_capacity - self._carried_quantity() < 1:
+                return False, "Picker capacity is full"
+            return True, ""
+
+        if action_type == "move_to_packer":
+            if remaining:
+                return False, f"Order is incomplete: {order_id}"
+            if not self.carried_items.get(order_id):
+                return False, f"No carried items for order: {order_id}"
+            if not self._has_packer_capacity(order_id):
+                return False, "No connected packer has capacity"
+            return True, ""
+
+        if action_type == "unload_to_packer":
+            if not self.carried_items.get(order_id):
+                return False, f"No carried items for order: {order_id}"
+            if not self._has_packer_capacity(order_id):
+                return False, "No connected packer has capacity"
+            return True, ""
+
+        return False, f"Unsupported picker action: {action_type}"
+
+    def _require_legal_picker_action(self, action_type, parameters):
+        legal, reason = self._is_legal_picker_action(action_type, parameters)
+        if not legal:
+            raise ValueError(reason)
+
+    def _candidate_orders(self):
+        queued = {order_obj.order_id for order_obj in self.order_queue}
+        orders = list(self.order_queue)
+        orders.extend(
+            order_obj
+            for order_id, order_obj in self.order_registry.items()
+            if order_id not in queued
+            and (
+                order_obj.status == "picked"
+                or (
+                    order_obj.status == "on-hold"
+                    and order_id in self.action_queue
+                )
+            )
+        )
+        return orders
+
+    def available_actions(self):
+        actions = []
+        for order_obj in self._candidate_orders():
+            order_id = order_obj.order_id
+            remaining = self._remaining_items(order_obj)
+            find_action = {
+                "action_type": "find_items",
+                "parameters": {"order_id": order_id},
+            }
+            if self._is_legal_picker_action(
+                find_action["action_type"], find_action["parameters"]
+            )[0]:
+                actions.append(find_action)
+
+            for queued_action in self.action_queue.get(order_id, []):
+                pick_action = {
+                    "action_type": "pick",
+                    "parameters": {
+                        "order_id": order_id,
+                        "item": queued_action["item"],
+                    },
+                }
+                if self._is_legal_picker_action(
+                    pick_action["action_type"], pick_action["parameters"]
+                )[0]:
+                    actions.append(pick_action)
+
+            move_action = {
+                "action_type": "move_to_packer",
+                "parameters": {"order_id": order_id},
+            }
+            if not remaining and self._is_legal_picker_action(
+                move_action["action_type"], move_action["parameters"]
+            )[0]:
+                actions.append(move_action)
+            unload_action = {
+                "action_type": "unload_to_packer",
+                "parameters": {"order_id": order_id},
+            }
+            if self._is_legal_picker_action(
+                unload_action["action_type"], unload_action["parameters"]
+            )[0]:
+                actions.append(unload_action)
+        actions.append({"action_type": "wait", "parameters": {}})
+        return actions
 
     def _inventory_agent(self):
         return next(
@@ -160,6 +596,9 @@ class PickerAgent:
 
         order_id = order_obj.order_id if order_obj is not None else None
         self.order_registry[order_id] = order_obj
+        self._require_legal_picker_action(
+            "find_items", {"order_id": order_id}
+        )
         picked = self.items.setdefault(order_id, {})
         remaining = {
             item: max(quantity - len(picked.get(item, [])), 0)
@@ -212,6 +651,9 @@ class PickerAgent:
         order_obj = self.order_registry.get(order_id)
         if order_obj is None:
             raise ValueError(f"Unknown order: {order_id}")
+        self._require_legal_picker_action(
+            "pick", {"order_id": order_id, "item": item}
+        )
         picked = self.items.setdefault(order_id, {})
         required_quantity = order_obj.items.get(item, 0)
         if len(picked.get(item, [])) >= required_quantity:
@@ -222,6 +664,8 @@ class PickerAgent:
         health = inventory.item_health[item][-1]
         inventory.update_inventory({item: 1}, "pick")
         picked.setdefault(item, []).append(health)
+        carried = self.carried_items.setdefault(order_id, {})
+        carried.setdefault(item, []).append(health)
         if item in self.available_items:
             self.available_items.remove(item)
         if all(
@@ -261,21 +705,80 @@ class PickerAgent:
         )
         if order_id is None:
             return None
-        action = self.action_queue[order_id].pop(0)
-        if not self.action_queue[order_id]:
-            self.action_queue.pop(order_id)
+        action = self.action_queue[order_id][0]
         self.last_picked_order_id = order_id
-        return self.pick_items(action["item"], order_id)
+        picked = self.pick_items(action["item"], order_id)
+        if order_id in self.action_queue:
+            self.action_queue[order_id].pop(0)
+            if not self.action_queue[order_id]:
+                self.action_queue.pop(order_id)
+        return picked
+
+    def execute_action(self, action, state=None):
+        if isinstance(action, dict):
+            action = AgentAction(
+                action["agent_id"], action["action_type"],
+                action.get("parameters", {}), action.get("timestep", 0)
+            )
+        if action.action_type == "find_items":
+            order_id = action.parameters["order_id"]
+            order_obj = self.order_registry.get(order_id)
+            if order_obj is None:
+                order_obj = next(
+                    (candidate for candidate in self.order_queue
+                     if candidate.order_id == order_id),
+                    None,
+                )
+            if order_obj is None:
+                raise ValueError(f"Unknown order: {order_id}")
+            self._require_legal_picker_action(
+                "find_items", {"order_id": order_id}
+            )
+            available = self.find_items(order_obj)
+            return {"success": True, "action": "find_items", "available": available}
+        if action.action_type == "pick":
+            self._require_legal_picker_action(
+                "pick",
+                {
+                    "order_id": action.parameters["order_id"],
+                    "item": action.parameters["item"],
+                },
+            )
+            picked = self.pick_items(
+                action.parameters["item"],
+                action.parameters["order_id"],
+            )
+            return {"success": True, "action": "pick", "picked": picked}
+        if action.action_type == "move_to_packer":
+            order_id = action.parameters["order_id"]
+            order_obj = self.order_registry.get(order_id)
+            if order_obj is None:
+                raise ValueError(f"Unknown order: {order_id}")
+            self._require_legal_picker_action(
+                "move_to_packer", {"order_id": order_id}
+            )
+            self.move_to_packer(order_obj)
+            return {"success": True, "action": "move_to_packer"}
+        if action.action_type == "unload_to_packer":
+            order_id = action.parameters["order_id"]
+            order_obj = self.order_registry.get(order_id)
+            if order_obj is None:
+                raise ValueError(f"Unknown order: {order_id}")
+            self._require_legal_picker_action(
+                "unload_to_packer", {"order_id": order_id}
+            )
+            self.unload_to_packer(order_obj)
+            return {"success": True, "action": "unload_to_packer"}
+        return super().execute_action(action, state)
 
     def advance_timestep(self):
         return self.process_next_action()
 
     def move_to_packer(self, items):
-        packers = [
-            agent
-            for agent in self.neighboring_agents
-            if isinstance(agent, PackerAgent)
-        ]
+        return self.unload_to_packer(items, require_complete=True)
+
+    def unload_to_packer(self, items, require_complete=False):
+        packers = self._connected_packers()
         if not packers:
             raise RuntimeError("Picker is not connected to a packer agent")
 
@@ -284,12 +787,19 @@ class PickerAgent:
             order_obj = self.order_queue[0]
         if order_obj is None:
             raise ValueError("move_to_packer requires an order")
+        action_type = "move_to_packer" if require_complete else "unload_to_packer"
+        self._require_legal_picker_action(
+            action_type, {"order_id": order_obj.order_id}
+        )
         picked = self.items.get(order_obj.order_id, {})
-        if not all(
+        carried = self.carried_items.get(order_obj.order_id, {})
+        if require_complete and not all(
             len(picked.get(item, [])) >= quantity
             for item, quantity in order_obj.items.items()
         ):
             raise ValueError(f"Order is not fully picked: {order_obj.order_id}")
+        if not carried:
+            raise ValueError(f"No carried items for order: {order_obj.order_id}")
         linked_orders = self.neighboring_agents if isinstance(
             self.neighboring_agents, dict
         ) else {}
@@ -297,8 +807,14 @@ class PickerAgent:
             (
                 agent
                 for agent in packers
-                if order_obj is not None
-                and order_obj in linked_orders.get(agent, [])
+                if any(
+                    linked_order is order_obj
+                    or (
+                        isinstance(linked_order, dict)
+                        and linked_order.get("order_id") == order_obj.order_id
+                    )
+                    for linked_order in linked_orders.get(agent, [])
+                )
             ),
             packers[0],
         )
@@ -306,13 +822,27 @@ class PickerAgent:
             "order_id": order_obj.order_id,
             "order": order_obj,
             "items": {
-                item: list(healths) for item, healths in picked.items()
+                item: list(healths) for item, healths in carried.items()
             },
         }
-        order_obj.status = "packing"
+        order_obj.status = "packing" if not require_complete else "packing"
         packer.order_queue.append(package)
         if isinstance(self.neighboring_agents, dict):
             self.neighboring_agents.setdefault(packer, []).append(package)
+        self.carried_items.pop(order_obj.order_id, None)
+        if all(
+            len(picked.get(item, [])) >= quantity
+            for item, quantity in order_obj.items.items()
+        ):
+            self.order_queue = [
+                queued_order
+                for queued_order in self.order_queue
+                if queued_order.order_id != order_obj.order_id
+            ]
+            self.action_queue.pop(order_obj.order_id, None)
+            self.blocked_orders.pop(order_obj.order_id, None)
+        else:
+            order_obj.status = "picking"
         return packer
 
     def wait(self):
@@ -321,67 +851,309 @@ class PickerAgent:
 
 
 
-class PackerAgent:
-    def __init__(self, packer_id, package_capacity, order_queue=[], packages=[], neighboring_agents=[]):
+class PackerAgent(AgentProtocol):
+    def __init__(self, packer_id, package_capacity, order_queue=None, packages=None, neighboring_agents=None, model=None):
         self.packer_id = packer_id
         self.package_capacity = package_capacity  # Maximum number of packages the packer can handle
-        self.order_queue = order_queue  # Queue of orders assigned to the packer(only item list of the order is assigned to the packer agent, not the whole order object)
-        self.packages = packages  # List of packages to be packed for delivery (only item list of the order is assigned to the packer agent, not the whole order object)
-        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
+        self.order_queue = [] if order_queue is None else order_queue
+        self.packages = [] if packages is None else packages
+        self.neighboring_agents = [] if neighboring_agents is None else neighboring_agents
+        self.state = "available"
+        self.model = model
+
+    def available_actions(self):
+        actions = [
+            {
+                "action_type": "accept_package",
+                "parameters": {"order_id": package["order_id"]},
+            }
+            for package in self.order_queue
+        ]
+        actions.extend(
+            {
+                "action_type": "move_to_dispatch",
+                "parameters": {"order_id": package["order_id"]},
+            }
+            for package in self.packages
+            if package.get("status") == "packed"
+        )
+        actions.append({"action_type": "wait", "parameters": {}})
+        return actions
+
+    def observe(self, state=None):
+        observation = super().observe(state)
+        observation.update(
+            {
+                "package_capacity": self.package_capacity,
+                "packages": [
+                    package["order_id"] for package in self.packages
+                ],
+                "action_mask": self.available_actions(),
+            }
+        )
+        return observation
+
     def pack_items(self, items):
-        #pack items into packages after receiving them from picker agent and move them to dispatch agent for delivery
-        pass
+        if not isinstance(items, dict) or "order_id" not in items:
+            raise ValueError("Package must contain an order_id")
+        order_id = items["order_id"]
+        existing = next(
+            (package for package in self.packages
+             if package["order_id"] == order_id),
+            None,
+        )
+        if existing is None:
+            known_order_ids = {
+                package["order_id"] for package in self.packages
+            }
+            if len(known_order_ids) >= self.package_capacity:
+                raise ValueError("Packer capacity exceeded")
+            package = {
+                "order_id": order_id,
+                "order": items.get("order"),
+                "items": {},
+            }
+            self.packages.append(package)
+        else:
+            package = existing
+
+        for item, healths in items.get("items", {}).items():
+            package.setdefault("items", {}).setdefault(item, []).extend(healths)
+
+        order_obj = items.get("order")
+        if order_obj is None:
+            order_obj = package.get("order")
+        if order_obj is not None:
+            package["order"] = order_obj
+        complete = order_obj is not None and all(
+            len(package.get("items", {}).get(item, [])) >= quantity
+            for item, quantity in order_obj.items.items()
+        )
+        if order_obj is not None:
+            order_obj.status = "packed" if complete else "picking"
+        package["status"] = "packed" if complete else "accumulating"
+        self.state = "available" if complete else "packing"
+        return package
+
     def move_to_dispatch(self, packages):
-        #move the packed packages to the dispatch agent for delivery
-        pass
+        dispatch = next(
+            (agent for agent in self.neighboring_agents
+             if isinstance(agent, DispatchAgent)),
+            None,
+        )
+        if dispatch is None:
+            raise RuntimeError("Packer is not connected to a dispatch agent")
+        for package in packages if isinstance(packages, list) else [packages]:
+            if package not in self.packages or package.get("status") != "packed":
+                raise ValueError("Only packed packages can move to dispatch")
+            dispatch.order_queue.append(package)
+            self.packages.remove(package)
+        self.state = "available"
+        return dispatch
+
+    def execute_action(self, action, state=None):
+        if isinstance(action, dict):
+            action = AgentAction(
+                action["agent_id"], action["action_type"],
+                action.get("parameters", {}), action.get("timestep", 0)
+            )
+        if action.action_type == "accept_package":
+            order_id = action.parameters["order_id"]
+            package = next(
+                (candidate for candidate in self.order_queue
+                 if candidate["order_id"] == order_id),
+                None,
+            )
+            if package is None:
+                raise ValueError(f"Unknown package: {order_id}")
+            self.order_queue.remove(package)
+            self.pack_items(package)
+            return {"success": True, "action": "accept_package"}
+        if action.action_type == "move_to_dispatch":
+            order_id = action.parameters.get("order_id")
+            packages = self.packages
+            if order_id is not None:
+                packages = [
+                    package for package in self.packages
+                    if package["order_id"] == order_id
+                ]
+                if not packages:
+                    raise ValueError(f"Unknown packed package: {order_id}")
+            self.move_to_dispatch(packages)
+            return {"success": True, "action": "move_to_dispatch"}
+        return super().execute_action(action, state)
     def wait(self):
         #wait until the dispatch is ready or no action is needed ie there is no new orders.
-        pass
+        return True
 
 
 
-class DispatchAgent:
-    def __init__(self, dispatch_id, delivery_capacity, order_queue=None, deliveries=None, neighboring_agents=None):
+class DispatchAgent(AgentProtocol):
+    def __init__(self, dispatch_id, delivery_capacity, order_queue=None, deliveries=None, neighboring_agents=None, model=None):
         self.dispatch_id = dispatch_id
         self.delivery_capacity = delivery_capacity  # Maximum number of deliveries the dispatch can handle
         self.order_queue = [] if order_queue is None else order_queue  # Queue of orders assigned to the dispatch(only item list of the order is assigned to the dispatch agent, not the whole order object)
         self.deliveries = [] if deliveries is None else deliveries  # List of deliveries to be made (only item list of the order is assigned to the dispatch agent, not the whole order object)
         self.neighboring_agents = {} if neighboring_agents is None else neighboring_agents  # Neighboring agents mapped to their order queues
+        self.model = model
+
+    def available_actions(self):
+        actions = [
+            {
+                "action_type": "assign_delivery",
+                "parameters": {"order_id": package["order_id"]},
+            }
+            for package in self.order_queue
+        ]
+        actions.append({"action_type": "wait", "parameters": {}})
+        return actions
+
+    def _delivery_agents(self):
+        neighbors = (
+            self.neighboring_agents.keys()
+            if isinstance(self.neighboring_agents, dict)
+            else self.neighboring_agents
+        )
+        return [
+            agent for agent in neighbors
+            if isinstance(agent, DeliveryAgent)
+        ]
+
     def assign_returns(self, return_requests):
         #assign return requests to delivery agents for pickup from customers and return to the return_evaluation agent for evaluation which return to the inventory agent for restocking or disposal.
         pass
     def assign_delivery(self, packages):
-        #assign packages to delivery agents for delivery to customers
-        pass
+        deliveries = packages if isinstance(packages, list) else [packages]
+        delivery_agents = self._delivery_agents()
+        if not delivery_agents:
+            raise RuntimeError("Dispatch is not connected to a delivery agent")
+        delivery_agent = next(
+            (
+                agent for agent in delivery_agents
+                if agent.state == "available"
+                and len(agent.order_queue) + len(deliveries)
+                <= agent.delivery_capacity
+            ),
+            None,
+        )
+        if delivery_agent is None:
+            raise ValueError("No delivery agent has capacity")
+        for package in deliveries:
+            if package not in self.order_queue:
+                raise ValueError("Unknown dispatch package")
+            if package.get("status") != "packed":
+                raise ValueError("Only packed packages can be assigned")
+        for package in deliveries:
+            self.order_queue.remove(package)
+        delivery_agent.deliver_packages(deliveries)
+        self.deliveries.extend(deliveries)
+        return delivery_agent
+
+    def execute_action(self, action, state=None):
+        if isinstance(action, dict):
+            action = AgentAction(
+                action["agent_id"], action["action_type"],
+                action.get("parameters", {}), action.get("timestep", 0)
+            )
+        if action.action_type == "assign_delivery":
+            order_id = action.parameters["order_id"]
+            package = next(
+                (
+                    candidate for candidate in self.order_queue
+                    if candidate.get("order_id") == order_id
+                ),
+                None,
+            )
+            if package is None:
+                raise ValueError(f"Unknown dispatch package: {order_id}")
+            self.assign_delivery(package)
+            return {"success": True, "action": "assign_delivery"}
+        return super().execute_action(action, state)
     def wait(self):
         #wait until the delivery agent is ready or no action is needed ie there is no new orders.
-        pass
+        return True
 
 
 
-class DeliveryAgent:
-    def __init__(self, delivery_id, delivery_capacity, order_queue=[], deliveries=[], neighboring_agents=[]):
+class DeliveryAgent(AgentProtocol):
+    def __init__(self, delivery_id, delivery_capacity, order_queue=None, deliveries=None, neighboring_agents=None, model=None):
         self.delivery_id = delivery_id
         self.delivery_capacity = delivery_capacity  # Maximum number of deliveries the delivery agent can handle
-        self.order_queue = order_queue  # Queue of orders assigned to the delivery agent(only item list of the order is assigned to the delivery agent, not the whole order object)
-        self.deliveries = deliveries  # List of deliveries to be made (only item list of the order is assigned to the delivery agent, not the whole order object)
-        self.neighboring_agents = neighboring_agents  # List of neighboring agents for communication
+        self.order_queue = [] if order_queue is None else order_queue
+        self.deliveries = [] if deliveries is None else deliveries
+        self.neighboring_agents = [] if neighboring_agents is None else neighboring_agents
+        self.state = "available"
+        self.current_delivery = None
+        self.travel_remaining = 0
+        self.model = model
+
     def deliver_packages(self, packages):
-        #deliver packages to customers after receiving them from dispatch agent and update the order status to "completed" or "failed" based on the delivery outcome.
-        pass
+        if len(self.order_queue) + len(packages) > self.delivery_capacity:
+            raise ValueError("Delivery capacity exceeded")
+        self.order_queue.extend(packages)
+        return len(packages)
+
+    def execute_action(self, action, state=None):
+        if isinstance(action, dict):
+            action = AgentAction(
+                action["agent_id"], action["action_type"],
+                action.get("parameters", {}), action.get("timestep", 0)
+            )
+        if action.action_type == "accept_delivery":
+            if self.current_delivery is not None:
+                raise ValueError("Delivery agent is already carrying a delivery")
+            order_id = action.parameters["order_id"]
+            package = next(
+                (candidate for candidate in self.order_queue
+                 if candidate.get("order_id") == order_id),
+                None,
+            )
+            if package is None:
+                raise ValueError(f"Unknown delivery package: {order_id}")
+            self.order_queue.remove(package)
+            self.current_delivery = package
+            self.state = "assigned"
+            return {"success": True, "action": "accept_delivery"}
+        if action.action_type == "travel_to_customer":
+            if self.current_delivery is None:
+                raise ValueError("No delivery is assigned")
+            self.travel_remaining = max(
+                int(action.parameters.get("duration", 1)), 1
+            )
+            self.state = "traveling"
+            return {"success": True, "action": "travel_to_customer"}
+        if action.action_type == "deliver_order":
+            if self.current_delivery is None:
+                raise ValueError("No delivery is assigned")
+            if self.travel_remaining > 0:
+                raise ValueError("Delivery agent has not reached the customer")
+            order_obj = self.current_delivery.get("order")
+            if order_obj is not None:
+                order_obj.status = "completed"
+            self.deliveries.append(self.current_delivery)
+            self.current_delivery = None
+            self.state = "available"
+            return {"success": True, "action": "deliver_order", "done": True}
+        return super().execute_action(action, state)
+
     def wait(self):
-        #wait until the dispatch is ready or no action is needed ie there is no new orders.
-        pass
+        if self.travel_remaining > 0:
+            self.travel_remaining -= 1
+            if self.travel_remaining == 0:
+                self.state = "at_customer"
+        return True
 
 
 
-class InventoryAgent:
+class InventoryAgent(AgentProtocol):
     def __init__(
         self,
         inventory_id,
         items=None,
         neighboring_agents=None,
         refill_delay=2,
+        model=None,
+        predictive_refill_model=None,
     ):
         if refill_delay < 0:
             raise ValueError("Refill delay cannot be negative")
@@ -397,8 +1169,17 @@ class InventoryAgent:
         self.simulation_time = 0
         self.refill_delay = refill_delay
         self.notifications = []
+        self.model = model
+        if predictive_refill_model is None:
+            from backend.model.predictive_refill import (
+                PlaceholderPredictiveRefillModel,
+            )
+
+            predictive_refill_model = PlaceholderPredictiveRefillModel()
+        self.predictive_refill_model = predictive_refill_model
         if items is not None:
             self.update_inventory(items, "add")
+        self.initialize_predictive_refill()
 
     @staticmethod
     def _item_quantities(items):
@@ -420,6 +1201,71 @@ class InventoryAgent:
             item: list(health_stack)
             for item, health_stack in self.item_health.items()
         }
+
+    def observe(self, state=None):
+        observation = super().observe(state)
+        observation.update(
+            {
+                "inventory": self.get_inventory(),
+                "item_inventory": self.get_item_inventory(),
+                "pending_refills": [
+                    {
+                        "items": dict(refill["items"]),
+                        "ready_at": refill["ready_at"],
+                    }
+                    for refill in self.pending_orders
+                ],
+                "waiting_pickers": {
+                    item: [
+                        {
+                            "order_id": request["order_id"],
+                            "quantity": request["quantity"],
+                        }
+                        for request in requests
+                    ]
+                    for item, requests in self.waiting_pickers.items()
+                },
+                "simulation_time": self.simulation_time,
+                "action_mask": self.available_actions(),
+            }
+        )
+        return observation
+
+    def available_actions(self):
+        actions = [
+            {
+                "action_type": "pick",
+                "parameters": {"items": {item: 1}},
+            }
+            for item, quantity in self.items.items()
+            if quantity > 0
+        ]
+        pending_items = {
+            item
+            for refill in self.pending_orders
+            for item in refill["items"]
+        }
+        refill_quantities = {}
+        for item, requests in self.waiting_pickers.items():
+            if item not in pending_items:
+                refill_quantities[item] = sum(
+                    request["quantity"] for request in requests
+                )
+        actions.extend(
+            {
+                "action_type": "refill",
+                "parameters": {"items": {item: quantity}},
+            }
+            for item, quantity in refill_quantities.items()
+            if quantity > 0
+        )
+        actions.append(
+            {
+                "action_type": "wait",
+                "parameters": {"simulation_time": 1},
+            }
+        )
+        return actions
 
     def check_availability(self, items, picker=None, order_id=None):
         available = []
@@ -447,9 +1293,46 @@ class InventoryAgent:
             )
         return available
 
-    def predictive_refill(self, items):
-        """Predict and schedule replenishment for unavailable items in the future."""
-        return None
+    def _scheduled_quantities(self):
+        scheduled = {}
+        for refill in self.pending_orders:
+            for item, quantity in refill["items"].items():
+                scheduled[item] = scheduled.get(item, 0) + quantity
+        return scheduled
+
+    def initialize_predictive_refill(self):
+        """Run the startup forecast after all inventory models are connected."""
+        return self.predictive_refill()
+
+    def predictive_refill(self, items=None):
+        """Forecast and schedule only stock not already available or pending."""
+        if items is None:
+            observation = {
+                "inventory": self.get_inventory(),
+                "item_inventory": self.get_item_inventory(),
+                "pending_refills": [
+                    {
+                        "items": dict(refill["items"]),
+                        "ready_at": refill["ready_at"],
+                    }
+                    for refill in self.pending_orders
+                ],
+                "simulation_time": self.simulation_time,
+            }
+            items = self.predictive_refill_model.forecast(observation)
+        recommendations = dict(self._item_quantities(items))
+        scheduled = self._scheduled_quantities()
+        refill = {
+            item: max(
+                quantity - self.items.get(item, 0) - scheduled.get(item, 0),
+                0,
+            )
+            for item, quantity in recommendations.items()
+        }
+        refill = {item: quantity for item, quantity in refill.items() if quantity}
+        if refill:
+            self.place_order(refill, simulation_time=self.refill_delay)
+        return refill
 
     def update_inventory(self, items, action):
         #update the inventory based on the action performed by the picker agent or any other agent that affects the inventory.
@@ -547,7 +1430,33 @@ class InventoryAgent:
             else:
                 remaining.append(order)
         self.pending_orders = remaining
+        if completed:
+            self.predictive_refill()
         return completed
+
+    def execute_action(self, action, state=None):
+        if isinstance(action, dict):
+            action = AgentAction(
+                action["agent_id"], action["action_type"],
+                action.get("parameters", {}), action.get("timestep", 0)
+            )
+        if action.action_type == "refill":
+            items = action.parameters["items"]
+            self.place_order(items, action.parameters.get("delay", self.refill_delay))
+            return {"success": True, "action": "refill"}
+        if action.action_type == "pick":
+            self.update_inventory(action.parameters["items"], "pick")
+            return {"success": True, "action": "pick"}
+        if action.action_type == "wait":
+            completed = self.wait(
+                action.parameters.get("simulation_time", 1)
+            )
+            return {
+                "success": True,
+                "action": "wait",
+                "completed_refills": completed,
+            }
+        return super().execute_action(action, state)
 
     def handle_returned_items(self, items):
         #handle the returned items from the customers and update the inventory based on  the returned items evaluator agent.
@@ -561,11 +1470,12 @@ class InventoryAgent:
 
 
 
-class ReturnEvaluationAgent:
-    def __init__(self, return_evaluation_id, neighboring_agents=None):
+class ReturnEvaluationAgent(AgentProtocol):
+    def __init__(self, return_evaluation_id, neighboring_agents=None, model=None):
         self.return_evaluation_id = return_evaluation_id
         self.neighboring_agents = [] if neighboring_agents is None else neighboring_agents
         self.order_queue = []
+        self.model = model
     def assess_trust_score_of_costomer(self, customer_id):
         #assess and update the trust score of the customer based on the historical data of the customer and the return policy of the system and the malicious factors affecting the simulation.
         pass
@@ -574,7 +1484,7 @@ class ReturnEvaluationAgent:
         pass
     def wait(self):
         #wait until the inventory agent is ready or no action is needed ie there is no new orders.
-        pass
+        return True
 
 
 
