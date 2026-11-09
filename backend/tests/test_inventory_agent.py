@@ -2,6 +2,7 @@ import unittest
 
 from backend.model import PlaceholderPredictiveRefillModel
 from backend.utils import (
+    AgentAction,
     InventoryAgent,
     PickerAgent,
     SimulationEngine,
@@ -104,6 +105,12 @@ class InventoryAgentTests(unittest.TestCase):
                 for action in observation["action_mask"]
             )
         )
+        self.assertFalse(
+            any(
+                action["action_type"] == "pick"
+                for action in observation["action_mask"]
+            )
+        )
 
     def test_wait_action_completes_refill_and_notifies_picker(self):
         inventory = InventoryAgent(
@@ -160,6 +167,26 @@ class InventoryAgentTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(inventory.get_inventory(), {"A": 1})
         self.assertEqual(inventory.get_item_inventory(), {"A": [0.9]})
+
+    def test_engine_synchronizes_inventory_time(self):
+        inventory = InventoryAgent("inventory")
+        engine = SimulationEngine(
+            SimulationState(agents=[inventory], time=3),
+            models={"inventory": inventory.model},
+        )
+
+        self.assertEqual(inventory.simulation_time, 3)
+        engine.step([
+            AgentAction(
+                "inventory",
+                "wait",
+                {"simulation_time": 1},
+                3,
+            )
+        ])
+
+        self.assertEqual(engine.state.time, 4)
+        self.assertEqual(inventory.simulation_time, 4)
 
 
 if __name__ == "__main__":
